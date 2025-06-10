@@ -495,6 +495,7 @@ const activeTab = ref('dashboard')
 const selectedFile = ref(null) 
 const isProcessingOCR = ref(false) 
 const ocrResults = ref(null) // Store OCR results
+const receiptsUpdateTrigger = ref(0) // ! Day ~2.1 Needed to trugger receipt storage and dyanmic updates to stored receipts
 
 // Editable data for the receipt
 const editableData = reactive({
@@ -513,18 +514,33 @@ const tabs = [
 
 // Mock data for dashboard stats - now using real data
 const totalReceipts = computed(() => {
+  receiptsUpdateTrigger.value
   const stats = receiptStorage.getStats()
   return stats.totalReceipts
 })
 
 const totalSpent = computed(() => {
+  receiptsUpdateTrigger.value
   const stats = receiptStorage.getStats()
   return stats.totalAmount
 })
 
 const totalCategories = computed(() => {
-  const stats = receiptStorage.getStats()
-  return stats.categories.length
+  receiptsUpdateTrigger.value
+  const allReceipts = receiptStorage.getAll()
+  const uniqueCategories = new Set()
+  
+  allReceipts.forEach(receipt => {
+    if (receipt.items && Array.isArray(receipt.items)) {
+      receipt.items.forEach(item => {
+        if (item.category) {
+          uniqueCategories.add(item.category)
+        }
+      })
+    }
+  })
+  
+  return uniqueCategories.size
 })
 
 // Currency formatting helper
@@ -617,6 +633,7 @@ const recalculateTotal = () => {
 
 // Computed property for saved receipts
 const savedReceipts = computed(() => {
+  receiptsUpdateTrigger.value // This makes the computed reactive to changes
   return receiptStorage.getAll().sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
 })
 
@@ -667,7 +684,8 @@ const deleteReceiptById = (receiptId) => {
     const success = receiptStorage.delete(receiptId)
     if (success) {
       console.log('Receipt deleted:', receiptId)
-      // The savedReceipts computed property will automatically update
+      // Trigger reactivity update
+      receiptsUpdateTrigger.value++
     } else {
       alert('Failed to delete receipt')
     }
@@ -769,17 +787,15 @@ const saveReceipt = () => {
   console.log('Saving receipt:', finalReceiptData)
 
   try {
-    // Actually save to localStorage using your existing storage system
     const savedReceipt = receiptStorage.save(finalReceiptData)
     console.log('Receipt saved successfully:', savedReceipt)
     
+    // Trigger reactivity update
+    receiptsUpdateTrigger.value++
+    
     alert(`Receipt saved!\nMerchant: ${finalReceiptData.merchant}\nTotal: ${formatCurrency(finalReceiptData.total)}\nItems: ${finalReceiptData.items.length}`)
     
-    // Clear the form after saving
     handleImageCleared()
-    
-    // Optionally switch to receipts tab to show the saved receipt
-    // activeTab.value = 'receipts'
     
   } catch (error) {
     console.error('Error saving receipt:', error)
