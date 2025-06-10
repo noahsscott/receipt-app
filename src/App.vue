@@ -767,11 +767,27 @@ const saveReceipt = () => {
   }
   
   console.log('Saving receipt:', finalReceiptData)
-  // TODO: Implement localStorage saving
-  alert(`Receipt saved!\nMerchant: ${finalReceiptData.merchant}\nTotal: ${formatCurrency(finalReceiptData.total)}\nItems: ${finalReceiptData.items.length}`)
+
+  try {
+    // Actually save to localStorage using your existing storage system
+    const savedReceipt = receiptStorage.save(finalReceiptData)
+    console.log('Receipt saved successfully:', savedReceipt)
+    
+    alert(`Receipt saved!\nMerchant: ${finalReceiptData.merchant}\nTotal: ${formatCurrency(finalReceiptData.total)}\nItems: ${finalReceiptData.items.length}`)
+    
+    // Clear the form after saving
+    handleImageCleared()
+    
+    // Optionally switch to receipts tab to show the saved receipt
+    // activeTab.value = 'receipts'
+    
+  } catch (error) {
+    console.error('Error saving receipt:', error)
+    alert('Failed to save receipt. Please try again.')
+  }
   
   // Clear the form after saving
-  handleImageCleared()
+  // handleImageCleared() //! Day 2.1 Saving problem, commenetd out for now
 }
 
 // Error handling
