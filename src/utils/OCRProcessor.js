@@ -5,7 +5,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import { parseReceiptText } from './DataParser.js'; //! Day 2.0
 
 // After getting Gemini response, also run enhanced parsing: //! Day 2.0
-const enhancedParsing = parseReceiptText(response.text(), confidence); //! Day 2.0
+// const enhancedParsing = parseReceiptText(response.text(), confidence); //! Day 2.0 (intended as backup only so leave commenented out for now)
 
 
 class OCRProcessor {
