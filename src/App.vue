@@ -763,11 +763,11 @@ const retryOCR = async () => {
   }
 }
 
-// Save receipt (placeholder)
-const saveReceipt = () => {
+// Save receipt
+const saveReceipt = async () => {
   // Create final receipt data from editable data
   const finalReceiptData = {
-    id: Date.now().toString(), // Simple ID for now
+    id: Date.now().toString(), // This will be replaced by UUID
     timestamp: new Date().toISOString(),
     merchant: editableData.merchant,
     total: parseFloat(editableData.total),
@@ -781,13 +781,14 @@ const saveReceipt = () => {
     })),
     confidence: ocrResults.value?.confidence || 0,
     itemsTotal: calculateEditableItemsTotal(),
-    edited: true // Mark as user-edited
+    edited: true
   }
   
   console.log('Saving receipt:', finalReceiptData)
-
+  
   try {
-    const savedReceipt = receiptStorage.save(finalReceiptData)
+    // Save with image compression - pass the selectedFile
+    const savedReceipt = await receiptStorage.save(finalReceiptData, selectedFile.value)
     console.log('Receipt saved successfully:', savedReceipt)
     
     // Trigger reactivity update
@@ -801,9 +802,6 @@ const saveReceipt = () => {
     console.error('Error saving receipt:', error)
     alert('Failed to save receipt. Please try again.')
   }
-  
-  // Clear the form after saving
-  // handleImageCleared() //! Day 2.1 Saving problem, commenetd out for now
 }
 
 // Error handling
