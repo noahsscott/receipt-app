@@ -1,13 +1,6 @@
 // src/utils/OCRProcessor.js
 import { GoogleGenerativeAI } from '@google/generative-ai';
 
-// In your OCRProcessor.js, you can now add: //! Day 2.0
-import { parseReceiptText } from './DataParser.js'; //! Day 2.0
-
-// After getting Gemini response, also run enhanced parsing: //! Day 2.0
-// const enhancedParsing = parseReceiptText(response.text(), confidence); //! Day 2.0 (intended as backup only so leave commenented out for now)
-
-
 class OCRProcessor {
   constructor() {
     this.apiKey = import.meta.env.VITE_GEMINI_API_KEY;
@@ -22,8 +15,8 @@ class OCRProcessor {
       // Convert image to base64
       const imageData = await this.fileToBase64(imageFile);
       
-      // Create the prompt for structured extraction
-      const prompt = this.createExtractionPrompt();
+      // Create the enhanced prompt focused on line items
+      const prompt = this.createLineItemExtractionPrompt();
       
       // Call Gemini Flash
       const result = await this.callGeminiFlash(imageData, prompt);
@@ -69,59 +62,50 @@ class OCRProcessor {
     });
   }
 
-//   createExtractionPrompt() {
-//     return `Analyze this receipt image and extract the following information. Return ONLY a valid JSON object with this exact structure:
+  createLineItemExtractionPrompt() {
+    return `Analyze this receipt image and extract ALL the information including EVERY individual item purchased. Return ONLY a valid JSON object with this exact structure:
 
-// {
-//   "merchant": "store or business name",
-//   "total": 99.99,
-//   "date": "MM/DD/YYYY",
-//   "items": [
-//     {"name": "item name", "price": 9.99}
-//   ],
-//   "confidence": 95,
-//   "rawText": "brief summary of what you can read"
-// }
-
-// Rules:
-// - Return ONLY the JSON object, no other text
-// - Use null for missing data
-// - Convert all dates to MM/DD/YYYY format
-// - Round all prices to 2 decimal places
-// - For total, find the final amount paid (not subtotal)
-// - For merchant, use the business name at the top
-// - Confidence should be 0-100 based on image quality
-// - Items array can be empty if individual items unclear
-// - Raw text should be a brief summary of readable text`;
-//   }
-
-  //! Day 2.0 Extraction prompt update 
-  createExtractionPrompt() {
-    return `Analyze this receipt image and extract the following information. Return ONLY a valid JSON object with this exact structure:
-
+{
+  "merchant": "store or business name",
+  "total": 99.99,
+  "date": "MM/DD/YYYY",
+  "items": [
     {
-    "merchant": "store or business name",
-    "total": 99.99,
-    "date": "MM/DD/YYYY",
-    "items": [
-        {"name": "item description", "price": 9.99},
-        {"name": "another item", "price": 12.50}
-    ],
-    "confidence": 95,
-    "rawText": "brief summary of what you can read"
+      "name": "Product Name",
+      "price": 12.99,
+      "quantity": 1,
+      "category": "food"
+    },
+    {
+      "name": "Another Product",
+      "price": 5.49,
+      "quantity": 2,
+      "category": "household"
     }
+  ],
+  "subtotal": 85.50,
+  "tax": 7.50,
+  "confidence": 95,
+  "rawText": "brief summary of what you can read"
+}
 
-    CRITICAL INSTRUCTIONS for line items:
-    - Extract EVERY individual product/item with its price
-    - Look for itemized purchases, not just totals
-    - Each item needs: descriptive name and individual price
-    - Skip tax, subtotal, tips, fees - only actual products
-    - If items are unclear or unreadable, use empty array []
-    - Use full product names, not abbreviations
-    - Round prices to 2 decimal places
+CRITICAL REQUIREMENTS for items array:
+- Extract EVERY single item/product listed on the receipt
+- Each item must have: name, price, quantity (default to 1 if not clear)
+- For price, use the individual item price, not total for quantity
+- If an item shows "2 x Apples $3.00", the price should be 1.50, quantity should be 2
+- Include ALL items, even small ones like bags, fees, discounts
+- For category, use: food, drink, household, personal, health, other
+- DO NOT skip items - be thorough
 
-    Return ONLY the JSON object, no other text.`;
-    }
+Other rules:
+- Use null for missing merchant/date/total data
+- Convert all dates to MM/DD/YYYY format
+- Round all prices to 2 decimal places
+- For total, find the final amount paid
+- Confidence should be 0-100 based on image clarity
+- If you can't read individual items clearly, set items to empty array but explain in rawText`;
+  }
 
   async callGeminiFlash(imageData, prompt) {
     try {
@@ -146,6 +130,8 @@ class OCRProcessor {
 
   parseGeminiResponse(responseText) {
     try {
+      console.log('Raw Gemini response:', responseText);
+      
       // Clean the response - remove any markdown formatting
       let cleanedResponse = responseText.trim();
       
@@ -156,61 +142,86 @@ class OCRProcessor {
 
       // Parse JSON
       const parsed = JSON.parse(cleanedResponse);
-
-      // If AI didn't extract items, try fallback
-      if (!parsed.items || parsed.items.length === 0) {
-        parsed.items = this.extractItemsFromRawText(parsed.rawText);
-      }
+      
+      console.log('Parsed Gemini response:', parsed);
+      
+      // Validate and clean items array
+      const items = this.validateAndCleanItems(parsed.items || []);
       
       // Validate required fields
       return {
         merchant: parsed.merchant || null,
         total: this.parseNumber(parsed.total),
         date: this.parseDate(parsed.date),
-        items: Array.isArray(parsed.items) ? parsed.items : [],
+        items: items,
+        subtotal: this.parseNumber(parsed.subtotal),
+        tax: this.parseNumber(parsed.tax),
         confidence: parsed.confidence || 85,
-        rawText: parsed.rawText || ''
+        rawText: parsed.rawText || responseText.substring(0, 200)
       };
 
     } catch (error) {
       console.error('Failed to parse Gemini response:', responseText);
+      console.error('Parse error:', error);
+      
+      // Try to extract items manually as fallback
+      const fallbackItems = this.extractItemsFallback(responseText);
+      
       throw new Error('Failed to parse receipt data from AI response');
     }
   }
 
-  extractItemsFromRawText(rawText) {
-    if (!rawText) return [];
-    
-    const lines = rawText.split('\n').map(line => line.trim()).filter(line => line);
-    const items = [];
-    
-    // Common receipt item patterns
-    const itemPatterns = [
-      /^(.+?)\s+\$(\d+\.\d{2})$/,           // "Item Name    $9.99"
-      /^(.+?)\s+(\d+\.\d{2})$/,            // "Item Name    9.99"
-      /^(.+?)\s+\d+\s+\$(\d+\.\d{2})$/,    // "Item Name  QTY  $9.99"
-    ];
+  validateAndCleanItems(items) {
+    if (!Array.isArray(items)) {
+      console.warn('Items is not an array:', items);
+      return [];
+    }
 
+    const cleanedItems = items
+      .filter(item => item && typeof item === 'object')
+      .map(item => ({
+        name: String(item.name || 'Unknown Item').trim(),
+        price: this.parseNumber(item.price) || 0,
+        quantity: parseInt(item.quantity) || 1,
+        category: String(item.category || 'other').toLowerCase(),
+        subtotal: (this.parseNumber(item.price) || 0) * (parseInt(item.quantity) || 1)
+      }))
+      .filter(item => item.name !== 'Unknown Item' || item.price > 0);
+
+    console.log('Cleaned items:', cleanedItems);
+    return cleanedItems;
+  }
+
+  extractItemsFallback(responseText) {
+    // Fallback method to extract items if JSON parsing fails
+    console.log('Attempting fallback item extraction from:', responseText);
+    
+    const items = [];
+    const lines = responseText.split('\n');
+    
+    // Look for patterns like "item name $price" or "item name price"
+    const itemPattern = /(.+?)\s+\$?(\d+\.?\d{0,2})/;
+    
     for (const line of lines) {
-      // Skip non-item lines
-      if (/total|subtotal|tax|discount|thank|receipt|store|phone|address/i.test(line)) {
-        continue;
-      }
-      
-      for (const pattern of itemPatterns) {
-        const match = line.match(pattern);
-        if (match) {
-          const name = match[1].trim();
-          const price = parseFloat(match[2]);
-          
-          if (name.length > 2 && price > 0 && price < 1000) {
-            items.push({ name, price });
-            break;
-          }
+      const match = line.trim().match(itemPattern);
+      if (match && match[1].length > 2) {
+        const [, name, price] = match;
+        const cleanName = name.replace(/^\d+\s*x?\s*/i, '').trim();
+        const cleanPrice = parseFloat(price);
+        
+        if (cleanPrice > 0 && cleanPrice < 1000) {
+          items.push({
+            name: cleanName,
+            price: cleanPrice,
+            quantity: 1,
+            category: 'other',
+            subtotal: cleanPrice
+          });
         }
       }
     }
     
+    console.log('Fallback extracted items:', items);
     return items;
   }
 
