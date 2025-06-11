@@ -489,6 +489,7 @@ import ReceiptUpload from './components/ReceiptUpload.vue'
 import ImagePreview from './components/ImagePreview.vue' 
 import { processReceiptImage } from './utils/OCRProcessor.js' 
 import { receiptStorage } from './utils/ReceiptStorage.js' 
+import { storageQuotaManager } from './utils/StorageQuotaManager.js'
 
 // Tab management
 const activeTab = ref('dashboard')
@@ -496,6 +497,8 @@ const selectedFile = ref(null)
 const isProcessingOCR = ref(false) 
 const ocrResults = ref(null) // Store OCR results
 const receiptsUpdateTrigger = ref(0) // ! Day ~2.1 Needed to trugger receipt storage and dyanmic updates to stored receipts
+const storageUsage = ref({})
+const storageWarnings = ref([])
 
 // Editable data for the receipt
 const editableData = reactive({
@@ -767,7 +770,7 @@ const retryOCR = async () => {
 const saveReceipt = async () => {
   // Create final receipt data from editable data
   const finalReceiptData = {
-    id: Date.now().toString(), // This will be replaced by UUID
+    id: Date.now().toString(), // This will be replaced by UUID in ReceiptStorage
     timestamp: new Date().toISOString(),
     merchant: editableData.merchant,
     total: parseFloat(editableData.total),
@@ -787,22 +790,67 @@ const saveReceipt = async () => {
   console.log('Saving receipt:', finalReceiptData)
   
   try {
-    // Save with image compression - pass the selectedFile
-    const savedReceipt = await receiptStorage.save(finalReceiptData, selectedFile.value)
-    console.log('Receipt saved successfully:', savedReceipt)
+    // Save with image compression and quota handling
+    const saveResult = await receiptStorage.save(finalReceiptData, selectedFile.value)
+    console.log('Receipt saved successfully:', saveResult)
+    
+    // Update storage monitoring
+    updateStorageMonitoring()
+    
+    // Show appropriate message based on storage status
+    let message = `Receipt saved!\nMerchant: ${finalReceiptData.merchant}\nTotal: ${formatCurrency(finalReceiptData.total)}\nItems: ${finalReceiptData.items.length}`
+    
+    // Add storage-related messages if needed
+    if (saveResult.storageInfo.cleanupPerformed) {
+      message += `\n\nNote: Cleaned up old receipts to make space.`
+    }
+    
+    if (saveResult.storageUsage.warningLevel === 'warning') {
+      message += `\n\nStorage: ${saveResult.storageUsage.percentUsed}% used - Consider cleanup soon.`
+    } else if (saveResult.storageUsage.warningLevel === 'critical') {
+      message += `\n\nStorage: ${saveResult.storageUsage.percentUsed}% used - Cleanup recommended!`
+    }
+    
+    alert(message)
     
     // Trigger reactivity update
     receiptsUpdateTrigger.value++
     
-    alert(`Receipt saved!\nMerchant: ${finalReceiptData.merchant}\nTotal: ${formatCurrency(finalReceiptData.total)}\nItems: ${finalReceiptData.items.length}`)
-    
+    // Clear the form
     handleImageCleared()
     
   } catch (error) {
     console.error('Error saving receipt:', error)
-    alert('Failed to save receipt. Please try again.')
+    
+    // Handle different types of storage errors
+    if (error.message.includes('Storage') || error.message.includes('Quota') || error.message.includes('quota')) {
+      alert(`Storage Error: ${error.message}\n\nTry deleting some old receipts to make space.`)
+    } else {
+      alert('Failed to save receipt. Please try again.')
+    }
   }
 }
+
+// Add computed property for storage status
+const storageStatus = computed(() => {
+  if (!storageUsage.value.warningLevel) return 'unknown'
+  return storageUsage.value.warningLevel
+})
+
+// Function to update storage monitoring
+const updateStorageMonitoring = () => {
+  storageUsage.value = storageQuotaManager.getStorageUsage()
+  storageWarnings.value = storageQuotaManager.getStorageRecommendations()
+  
+  // Show warnings if needed
+  if (storageUsage.value.warningLevel === 'critical') {
+    console.warn('Storage critical:', storageUsage.value)
+  } else if (storageUsage.value.warningLevel === 'warning') {
+    console.warn('Storage warning:', storageUsage.value)
+  }
+}
+
+
 
 // Error handling
 const handleError = (error) => {

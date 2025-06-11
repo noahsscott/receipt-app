@@ -3,6 +3,8 @@
 
 import { IDGenerator } from './IDGenerator.js';
 import { imageCompressor } from './ImageCompressor.js';
+import { storageQuotaManager } from './StorageQuotaManager.js';
+import { tagsManager } from './TagsManager.js';
 
 class ReceiptStorage {
   constructor() {
@@ -14,58 +16,87 @@ class ReceiptStorage {
  * Save a new receipt or update existing one
  * @param {Object} receiptData - Receipt data to save
  * @param {File} imageFile - Optional image file to compress and store
- * @returns {Object} Saved receipt with ID
+ * @param {Array} userTags - Optional user-defined tags
+ * @returns {Object} Saved receipt with ID, storage info, and tags
  */
-    async save(receiptData, imageFile = null) {
-    try {
-        const receipts = this.getAll();
-        
-        // Generate ID if not provided
-        if (!receiptData.id) {
-            receiptData.id = this.generateId();
-        }
-        
-        // Handle image compression if provided
-        let imageData = receiptData.imageData || null;
-        if (imageFile && imageCompressor.isValidImageFile(imageFile)) {
-            console.log('Compressing image for storage...');
-            imageData = await imageCompressor.compressImage(imageFile);
-        }
-        
-        // Create receipt with enhanced structure
-        const receiptToSave = {
-            ...receiptData,
-            imageData: imageData,
-            version: this.version,
-            createdAt: receiptData.createdAt || new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-            userEdited: receiptData.userEdited || false,
-            tags: receiptData.tags || []
-        };
-        
-        // Check if updating existing receipt
-        const existingIndex = receipts.findIndex(r => r.id === receiptData.id);
-        
-        if (existingIndex >= 0) {
-            // Update existing
-            receipts[existingIndex] = receiptToSave;
-            console.log('Updated existing receipt:', receiptToSave.id);
-        } else {
-            // Add new
-            receipts.push(receiptToSave);
-            console.log('Saved new receipt:', receiptToSave.id);
-        }
-        
-        // Save to localStorage
-        localStorage.setItem(this.storageKey, JSON.stringify(receipts));
-        
-        return receiptToSave;
-        
-    } catch (error) {
-        console.error('Error saving receipt:', error);
-        throw new Error(`Failed to save receipt: ${error.message}`);
+async save(receiptData, imageFile = null, userTags = []) {
+  try {
+    const receipts = this.getAll();
+    
+    // Generate ID if not provided
+    if (!receiptData.id) {
+      receiptData.id = this.generateId();
     }
+    
+    // Handle image compression if provided
+    let imageData = receiptData.imageData || null;
+    if (imageFile && imageCompressor.isValidImageFile(imageFile)) {
+      console.log('Compressing image for storage...');
+      
+      const estimatedSize = storageQuotaManager.estimateReceiptSize(receiptData, 150);
+      const safety = storageQuotaManager.checkStorageSafety(estimatedSize);
+      
+      if (!safety.isSafe) {
+        console.warn('Storage warning before compression:', safety);
+      }
+      
+      imageData = await imageCompressor.compressImage(imageFile);
     }
+    
+    // Generate automatic tags
+    const autoTags = tagsManager.generateAutoTags(receiptData);
+    console.log('Generated auto tags:', autoTags);
+    
+    // Merge with user tags
+    const tags = tagsManager.mergeTags(autoTags, userTags);
+    console.log('Final tags:', tags);
+    
+    // Create receipt with enhanced structure
+    const receiptToSave = {
+      ...receiptData,
+      imageData: imageData,
+      tags: tags, // Include the full tags object
+      version: this.version,
+      createdAt: receiptData.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      userEdited: receiptData.userEdited || false
+    };
+    
+    // Check if updating existing receipt
+    const existingIndex = receipts.findIndex(r => r.id === receiptData.id);
+    
+    if (existingIndex >= 0) {
+      // Update existing
+      receipts[existingIndex] = receiptToSave;
+      console.log('Updated existing receipt:', receiptToSave.id);
+    } else {
+      // Add new
+      receipts.push(receiptToSave);
+      console.log('Saved new receipt:', receiptToSave.id);
+    }
+    
+    // Use safe save with quota handling
+    const saveResult = storageQuotaManager.safeSave(this.storageKey, JSON.stringify(receipts));
+    
+    if (!saveResult.success) {
+      throw new Error(saveResult.message);
+    }
+    
+    // Log for monitoring
+    console.log('Storage usage after save:', saveResult.usage);
+    
+    return {
+      receipt: receiptToSave,
+      storageInfo: saveResult,
+      storageUsage: saveResult.usage,
+      tagsGenerated: tags
+    };
+    
+  } catch (error) {
+    console.error('Error saving receipt:', error);
+    throw new Error(`Failed to save receipt: ${error.message}`);
+  }
+}
 
   /**
    * Get all receipts from storage
